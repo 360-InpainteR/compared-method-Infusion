@@ -23,6 +23,8 @@ from utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
+from utils.render_utils import generate_path, create_videos, save_img_f32, save_img_u8
+from utils.general_utils import colormap
 def get_intrinsics2(H, W, fovx, fovy):
     fx = 0.5 * W / np.tan(0.5 * fovx)
     fy = 0.5 * H / np.tan(0.5 * fovy)
@@ -39,6 +41,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     depth_dis_path=os.path.join(model_path, name, "ours_{}".format(iteration), "depth_dis")
     intri_path=os.path.join(model_path, name, "ours_{}".format(iteration), "intri")
     c2w_path=os.path.join(model_path, name, "ours_{}".format(iteration), "c2w")
+    depthmap_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depthmap")
     makedirs(render_path, exist_ok=True)
     makedirs(test_render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
@@ -46,6 +49,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     makedirs(depth_dis_path, exist_ok=True)
     makedirs(intri_path, exist_ok=True)
     makedirs(c2w_path, exist_ok=True)
+    makedirs(depthmap_path, exist_ok=True)
     print(gaussians._xyz.shape)
     n=len(views)
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
@@ -71,7 +75,52 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         cv2.imwrite(os.path.join(depth_path, view.image_name + ".png"), img)
         torchvision.utils.save_image(rendering, os.path.join(render_path, view.image_name + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, view.image_name + ".png"))
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
+        depthmap=colormap(depth)
+        save_img_u8(depthmap.permute(1,2,0).cpu().numpy(), os.path.join(depthmap_path, '{0:05d}'.format(idx) + ".png"))
+        
+        
+def render_video(model_path, name, iteration, views, gaussians, pipeline, background, scene):
+    print("render videos ...")
+    traj_dir = os.path.join(args.model_path, 'traj', "ours_{}".format(scene.loaded_iter))
+    os.makedirs(traj_dir, exist_ok=True)
+    n_fames = 240
+    cam_trajs = generate_path(scene.getTrainCameras(), n_frames=n_fames)
+    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    depth_path=os.path.join(model_path, name, "ours_{}".format(iteration), "vis")
+    depthmap_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depthmap")
+    depth_dis_path=os.path.join(model_path, name, "ours_{}".format(iteration), "depth_dis")
+    
+    
+    makedirs(render_path, exist_ok=True)
+    makedirs(depth_path, exist_ok=True)
+    makedirs(depth_dis_path, exist_ok=True)
+    makedirs(depthmap_path, exist_ok=True)
+
+    print(gaussians._xyz.shape)
+    n=len(cam_trajs)
+    for idx, view in enumerate(tqdm(cam_trajs, desc="Rendering progress")):
+        renders = render(view, gaussians, pipeline, background)
+        c2w=torch.eye(4)
+        c2w[:3, :3]=torch.from_numpy(view.R)
+        c2w[:3, 3] = -torch.from_numpy(view.R) @ torch.from_numpy(view.T)
+        depth=renders["depth_3dgs"].squeeze(0).detach().cpu().numpy()
+        print(depth.min())
+        
+        
+        save_img_f32(depth, os.path.join(depth_path, 'depth_{0:05d}'.format(idx) + ".tiff"))
+        
+        rendering=renders["render"]
+        
+        save_img_u8(rendering.permute(1,2,0).cpu().numpy(), os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+        
+        depthmap=colormap(depth)
+        save_img_u8(depthmap.permute(1,2,0).cpu().numpy(), os.path.join(depthmap_path, '{0:05d}'.format(idx) + ".png"))
+        
+    create_videos(base_dir=traj_dir, input_dir=traj_dir, out_name='render_traj', num_frames=n_fames)
+        
+
+
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, render_path : bool):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
@@ -83,6 +132,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
         if not skip_test:
              render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background)
+             
+        if render_path:
+            render_video(dataset.model_path, "traj", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, scene)
+        
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -92,10 +145,11 @@ if __name__ == "__main__":
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--skip_train", action="store_true")
     parser.add_argument("--skip_test", action="store_true")
+    parser.add_argument("--render_path", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test)
+    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.render_path)

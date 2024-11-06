@@ -40,13 +40,23 @@ def loadCam(args, id, cam_info, resolution_scale):
     resized_image_rgb = PILtoTorch(cam_info.image, resolution)
     gt_image = resized_image_rgb[:3, ...]
 
-    resized_image_mask_rgb = cam_info.image_mask.resize(resolution)
-    gt_image_mask = np.array(resized_image_mask_rgb)
-    gt_image_mask = np.where(gt_image_mask >127, 1, 0).astype(np.uint8)
+    # resized_image_mask_rgb = cam_info.image_mask.resize(resolution)
+    # gt_image_mask = np.array(resized_image_mask_rgb)
+    # gt_image_mask = np.where(gt_image_mask >127, 1, 0).astype(np.uint8)
+    # loaded_mask = None
+    # if resized_image_rgb.shape[1] == 4:
+    #     loaded_mask = resized_image_rgb[3:4, ...]
+        
+    # load mask if available
+    gt_image_mask = None
+    if cam_info.image_mask is not None:
+        resized_image_mask_rgb = cam_info.image_mask.resize(resolution)
+        gt_image_mask = np.array(resized_image_mask_rgb)
+        gt_image_mask = np.where(gt_image_mask > 0, 1, 0).astype(np.uint8)
     loaded_mask = None
     if resized_image_rgb.shape[1] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
-
+        
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
                   image=gt_image, image_mask=gt_image_mask, gt_alpha_mask=loaded_mask,
